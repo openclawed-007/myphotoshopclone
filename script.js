@@ -344,12 +344,18 @@ class ImageOverlayApp {
         this.renderCanvas();
     }
 
-    getFittedLayerSize(image) {
+    getFittedLayerSize(image, options = {}) {
         const canvasWidth = this.viewWidth || this.canvasContainer?.clientWidth || 1000;
         const canvasHeight = this.viewHeight || this.canvasContainer?.clientHeight || 700;
-        const maxWidth = canvasWidth * 0.84;
-        const maxHeight = canvasHeight * 0.84;
-        const scale = Math.min(maxWidth / image.width, maxHeight / image.height, 1);
+        const paddingRatio = options.paddingRatio ?? 0.84;
+        const allowUpscale = options.allowUpscale ?? false;
+        const maxScale = options.maxScale ?? 1;
+        const maxWidth = canvasWidth * paddingRatio;
+        const maxHeight = canvasHeight * paddingRatio;
+        const fittedScale = Math.min(maxWidth / image.width, maxHeight / image.height);
+        const scale = allowUpscale
+            ? Math.min(fittedScale, maxScale)
+            : Math.min(fittedScale, 1);
         const width = Math.max(1, Math.round(image.width * scale));
         const height = Math.max(1, Math.round(image.height * scale));
 
@@ -974,44 +980,33 @@ class ImageOverlayApp {
     autoFitLayers() {
         if (this.layers.length === 0) return;
 
-        const canvasWidth = this.viewWidth || this.canvas.width;
-        const canvasHeight = this.viewHeight || this.canvas.height;
+        const layerCount = this.layers.length;
+        const spread = layerCount > 1 ? Math.min(18, 70 / layerCount) : 0;
+        const centerIndex = (layerCount - 1) / 2;
 
-        // Define target display size (85% of canvas to leave margin)
-        const targetDisplayWidth = canvasWidth * 0.85;
-        const targetDisplayHeight = canvasHeight * 0.85;
-
-        // Make all images the exact same display size while maintaining their aspect ratios
-        this.layers.forEach(layer => {
-            const imageAspectRatio = layer.image.width / layer.image.height;
-            const targetAspectRatio = targetDisplayWidth / targetDisplayHeight;
-
-            let finalWidth, finalHeight;
-
-            if (imageAspectRatio > targetAspectRatio) {
-                // Image is wider than target - fit to width
-                finalWidth = targetDisplayWidth;
-                finalHeight = targetDisplayWidth / imageAspectRatio;
-            } else {
-                // Image is taller than target - fit to height
-                finalHeight = targetDisplayHeight;
-                finalWidth = targetDisplayHeight * imageAspectRatio;
-            }
-
-            // Calculate scale and apply
-            layer.scale = finalWidth / layer.image.width;
-            layer.width = finalWidth;
-            layer.height = finalHeight;
-
-            // Center all layers
-            layer.x = (canvasWidth - layer.width) / 2;
-            layer.y = (canvasHeight - layer.height) / 2;
+        this.layers.forEach((layer, index) => {
+            const fitted = this.getFittedLayerSize(layer.image, {
+                paddingRatio: 0.88,
+                allowUpscale: true,
+                maxScale: 2.5
+            });
+            const offset = Math.round((index - centerIndex) * spread);
+            layer.scale = fitted.scale;
+            layer.width = fitted.width;
+            layer.height = fitted.height;
+            layer.x = fitted.x + offset;
+            layer.y = fitted.y + offset;
         });
 
+        this.setZoom(1);
+        this.panX = 0;
+        this.panY = 0;
         this.renderCanvas();
 
         // Show feedback to user
-        this.showNotification('All images auto-fitted to same size');
+        this.showNotification(layerCount > 1
+            ? 'Layers fitted to canvas and slightly offset for easier editing'
+            : 'Image fitted to canvas');
     }
 
     showNotification(message) {
