@@ -980,22 +980,30 @@ class ImageOverlayApp {
     autoFitLayers() {
         if (this.layers.length === 0) return;
 
-        const layerCount = this.layers.length;
-        const spread = layerCount > 1 ? Math.min(18, 70 / layerCount) : 0;
-        const centerIndex = (layerCount - 1) / 2;
+        const canvasWidth = this.viewWidth || this.canvas.width;
+        const canvasHeight = this.viewHeight || this.canvas.height;
+        const targetDisplayWidth = canvasWidth * 0.88;
+        const targetDisplayHeight = canvasHeight * 0.88;
+        const targetAspectRatio = targetDisplayWidth / targetDisplayHeight;
 
-        this.layers.forEach((layer, index) => {
-            const fitted = this.getFittedLayerSize(layer.image, {
-                paddingRatio: 0.88,
-                allowUpscale: true,
-                maxScale: 2.5
-            });
-            const offset = Math.round((index - centerIndex) * spread);
-            layer.scale = fitted.scale;
-            layer.width = fitted.width;
-            layer.height = fitted.height;
-            layer.x = fitted.x + offset;
-            layer.y = fitted.y + offset;
+        this.layers.forEach((layer) => {
+            const imageAspectRatio = layer.image.width / layer.image.height;
+            let finalWidth;
+            let finalHeight;
+
+            if (imageAspectRatio > targetAspectRatio) {
+                finalWidth = targetDisplayWidth;
+                finalHeight = targetDisplayWidth / imageAspectRatio;
+            } else {
+                finalHeight = targetDisplayHeight;
+                finalWidth = targetDisplayHeight * imageAspectRatio;
+            }
+
+            layer.scale = finalWidth / layer.image.width;
+            layer.width = finalWidth;
+            layer.height = finalHeight;
+            layer.x = Math.round((canvasWidth - layer.width) / 2);
+            layer.y = Math.round((canvasHeight - layer.height) / 2);
         });
 
         this.setZoom(1);
@@ -1003,10 +1011,7 @@ class ImageOverlayApp {
         this.panY = 0;
         this.renderCanvas();
 
-        // Show feedback to user
-        this.showNotification(layerCount > 1
-            ? 'Layers fitted to canvas and slightly offset for easier editing'
-            : 'Image fitted to canvas');
+        this.showNotification('All layers auto-fitted to the same target size');
     }
 
     showNotification(message) {
