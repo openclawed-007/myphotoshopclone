@@ -158,6 +158,30 @@ body::before {
     transform: translateY(-1px);
 }
 
+.btn:disabled,
+.mini-btn:disabled,
+.toggle-btn:disabled,
+.icon-btn:disabled,
+.zoom-btn:disabled,
+.layer-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+.btn:disabled:hover,
+.mini-btn:disabled:hover,
+.toggle-btn:disabled:hover,
+.icon-btn:disabled:hover,
+.zoom-btn:disabled:hover,
+.layer-btn:disabled:hover {
+    background: inherit;
+    color: inherit;
+    transform: none;
+    box-shadow: none;
+}
+
 /* Main Content */
 .main-content {
     display: flex;
@@ -944,6 +968,28 @@ body::before {
     padding: 2px 6px;
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
     font-size: 0.8em;
+}
+
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-8px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes slideOut {
+    from {
+        opacity: 1;
+        transform: translateY(0);
+    }
+    to {
+        opacity: 0;
+        transform: translateY(-8px);
+    }
 }
 
 /* Scrollbar Styling */

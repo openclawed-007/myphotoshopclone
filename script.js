@@ -21,6 +21,7 @@ class ImageOverlayApp {
         this.setupEventListeners();
         this.setupDragAndDrop();
         this.setupLayerDragContainer();
+        this.updateActionState();
         this.resizeCanvas();
     }
 
@@ -282,6 +283,8 @@ class ImageOverlayApp {
 
     handleFileSelect(e) {
         this.handleFiles(e.target.files);
+        // Allow picking the same file again in a later selection.
+        e.target.value = '';
     }
 
     handleFiles(files) {
@@ -305,6 +308,7 @@ class ImageOverlayApp {
     }
 
     addLayer(image, name) {
+        const fittedSize = this.getFittedLayerSize(image);
         const layerId = `layer_${this.layerIdCounter++}`;
         const layer = {
             id: layerId,
@@ -312,11 +316,11 @@ class ImageOverlayApp {
             image: image,
             opacity: 1,
             visible: true,
-            x: 0,
-            y: 0,
-            width: image.width,
-            height: image.height,
-            scale: 1,
+            x: fittedSize.x,
+            y: fittedSize.y,
+            width: fittedSize.width,
+            height: fittedSize.height,
+            scale: fittedSize.scale,
             filters: {
                 brightness: 100,
                 contrast: 100,
@@ -336,7 +340,26 @@ class ImageOverlayApp {
         this.createLayerElement(layer);
         this.updateLayerCount();
         this.hideDropZone();
+        this.updateActionState();
         this.renderCanvas();
+    }
+
+    getFittedLayerSize(image) {
+        const canvasWidth = this.viewWidth || this.canvasContainer?.clientWidth || 1000;
+        const canvasHeight = this.viewHeight || this.canvasContainer?.clientHeight || 700;
+        const maxWidth = canvasWidth * 0.84;
+        const maxHeight = canvasHeight * 0.84;
+        const scale = Math.min(maxWidth / image.width, maxHeight / image.height, 1);
+        const width = Math.max(1, Math.round(image.width * scale));
+        const height = Math.max(1, Math.round(image.height * scale));
+
+        return {
+            width,
+            height,
+            scale,
+            x: Math.round((canvasWidth - width) / 2),
+            y: Math.round((canvasHeight - height) / 2)
+        };
     }
 
     createLayerElement(layer) {
@@ -923,20 +946,29 @@ class ImageOverlayApp {
         }
         
         this.updateLayerCount();
+        this.updateActionState();
         this.renderCanvas();
         
         if (this.layers.length === 0) {
+            this.restoreEmptyState();
             this.showDropZone();
         }
     }
 
     clearAllLayers() {
+        if (!this.layers.length) return;
+        const confirmed = window.confirm('Remove all layers and reset the canvas?');
+        if (!confirmed) return;
         this.layers = [];
-        this.layersContainer.innerHTML = '<div class="empty-state"><i class="fas fa-images"></i><p>No layers yet</p><p class="empty-subtitle">Add images to get started</p></div>';
+        this.restoreEmptyState();
         this.updateLayerCount();
+        this.updateActionState();
         this.showDropZone();
         this.clearCanvas();
         this.appliedCrop = null;
+        this.cropRect = null;
+        this.exitCropMode();
+        this.showNotification('Canvas cleared');
     }
 
     autoFitLayers() {
@@ -1007,6 +1039,17 @@ class ImageOverlayApp {
             notification.style.animation = 'slideOut 0.3s ease';
             setTimeout(() => notification.remove(), 300);
         }, 3000);
+    }
+
+    updateActionState() {
+        const hasLayers = this.layers.length > 0;
+        if (this.autoFitBtn) this.autoFitBtn.disabled = !hasLayers;
+        if (this.clearAllBtn) this.clearAllBtn.disabled = !hasLayers;
+        if (this.saveBtn) this.saveBtn.disabled = !hasLayers;
+    }
+
+    restoreEmptyState() {
+        this.layersContainer.innerHTML = '<div class="empty-state"><i class="fas fa-images"></i><p>No layers yet</p><p class="empty-subtitle">Add images to get started</p></div>';
     }
 
     resizeCanvas() {
