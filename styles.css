@@ -622,7 +622,7 @@ button {
     background-size: 20px 20px;
     background-position: 0 0, 0 10px, 10px -10px, -10px 0;
     box-shadow: var(--shadow);
-    touch-action: pan-y;
+    touch-action: none;
     contain: layout paint;
 }
 

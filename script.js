@@ -14,6 +14,14 @@ class ImageOverlayApp {
         this.panPointerId = null;
         this.lastPointerX = 0;
         this.lastPointerY = 0;
+        this.canvasPointers = new Map();
+        this.isPinching = false;
+        this.pinchStartDistance = 0;
+        this.pinchStartZoom = 1;
+        this.pinchStartPanX = 0;
+        this.pinchStartPanY = 0;
+        this.pinchStartCenterX = 0;
+        this.pinchStartCenterY = 0;
         // Persistent crop clip applied to render/export
         this.appliedCrop = null;
         this.renderRAF = null;
@@ -1205,8 +1213,19 @@ class ImageOverlayApp {
     }
 
     // Zoom helpers
-    setZoom(zoom) {
+    setZoom(zoom, options = {}) {
         const clamped = Math.min(4, Math.max(0.25, zoom));
+        const previous = this.zoom || 1;
+        if (options.anchor && previous > 0) {
+            const canvasRect = this.canvasContainer.getBoundingClientRect();
+            const centerX = canvasRect.left + canvasRect.width / 2;
+            const centerY = canvasRect.top + canvasRect.height / 2;
+            const anchorX = options.anchor.x;
+            const anchorY = options.anchor.y;
+            const ratio = clamped / previous;
+            this.panX = anchorX - centerX - ratio * (anchorX - centerX - this.panX);
+            this.panY = anchorY - centerY - ratio * (anchorY - centerY - this.panY);
+        }
         this.zoom = clamped;
         // Clamp pan to new zoom bounds and toggle cursor state
         this.clampPan();
@@ -1245,10 +1264,21 @@ class ImageOverlayApp {
 
     onPointerDown(e) {
         if (this.isCropping) return; // disable panning while cropping
+        if (e.target.closest && e.target.closest('.zoom-controls')) return;
+
+        if (e.pointerType === 'touch') {
+            this.canvasPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+            try { this.canvasContainer.setPointerCapture(e.pointerId); } catch (_) {}
+            if (this.canvasPointers.size >= 2) {
+                this.startPinchGesture();
+                e.preventDefault();
+                return;
+            }
+        }
+
         // Start panning on left button (0), middle (1), touch/pen when zoomed in
         const isPrimary = e.isPrimary !== false; // default true for first pointer
         if (!isPrimary) return;
-        if (e.target.closest && e.target.closest('.zoom-controls')) return;
         const canPanWithButton = (e.button === 0 || e.button === 1);
         if (this.zoom <= 1 || !canPanWithButton) return;
 
@@ -1256,8 +1286,63 @@ class ImageOverlayApp {
         this.panPointerId = e.pointerId;
         this.lastPointerX = e.clientX;
         this.lastPointerY = e.clientY;
-        this.canvasContainer.setPointerCapture(e.pointerId);
+        try { this.canvasContainer.setPointerCapture(e.pointerId); } catch (_) {}
         this.canvasContainer.classList.add('panning');
+    }
+
+    startPinchGesture() {
+        const points = this.getPinchPoints();
+        if (!points) return;
+        this.isPinching = true;
+        this.isPanning = false;
+        this.panPointerId = null;
+        this.canvasContainer.classList.remove('panning');
+        this.pinchStartDistance = points.distance;
+        this.pinchStartZoom = this.zoom || 1;
+        this.pinchStartPanX = this.panX;
+        this.pinchStartPanY = this.panY;
+        this.pinchStartCenterX = points.centerX;
+        this.pinchStartCenterY = points.centerY;
+        this.canvasContainer.classList.add('can-pan');
+    }
+
+    getPinchPoints() {
+        const points = [...this.canvasPointers.values()];
+        if (points.length < 2) return null;
+        const first = points[0];
+        const second = points[1];
+        const dx = second.x - first.x;
+        const dy = second.y - first.y;
+        return {
+            distance: Math.max(1, Math.hypot(dx, dy)),
+            centerX: (first.x + second.x) / 2,
+            centerY: (first.y + second.y) / 2
+        };
+    }
+
+    updatePinchGesture() {
+        const points = this.getPinchPoints();
+        if (!points || !this.pinchStartDistance) return;
+        const nextZoom = Math.min(4, Math.max(0.25, this.pinchStartZoom * (points.distance / this.pinchStartDistance)));
+        const canvasRect = this.canvasContainer.getBoundingClientRect();
+        const canvasCenterX = canvasRect.left + canvasRect.width / 2;
+        const canvasCenterY = canvasRect.top + canvasRect.height / 2;
+        const ratio = nextZoom / this.pinchStartZoom;
+
+        this.zoom = nextZoom;
+        this.panX = points.centerX - canvasCenterX - ratio * (this.pinchStartCenterX - canvasCenterX - this.pinchStartPanX);
+        this.panY = points.centerY - canvasCenterY - ratio * (this.pinchStartCenterY - canvasCenterY - this.pinchStartPanY);
+        this.clampPan();
+        this.canvasContainer.classList.toggle('can-pan', this.zoom > 1);
+
+        if (this.zoomSlider) {
+            const percent = Math.round(this.zoom * 100);
+            if (Number(this.zoomSlider.value) !== percent) this.zoomSlider.value = String(percent);
+        }
+        if (this.zoomDisplay) {
+            this.zoomDisplay.textContent = `${Math.round(this.zoom * 100)}%`;
+        }
+        this.renderCanvas();
     }
 
     // ---- Crop Tool ----
@@ -1409,6 +1494,15 @@ class ImageOverlayApp {
     }
 
     onPointerMove(e) {
+        if (e.pointerType === 'touch' && this.canvasPointers.has(e.pointerId)) {
+            this.canvasPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+            if (this.canvasPointers.size >= 2) {
+                this.updatePinchGesture();
+                e.preventDefault();
+                return;
+            }
+        }
+
         if (!this.isPanning || e.pointerId !== this.panPointerId) return;
         const dx = e.clientX - this.lastPointerX;
         const dy = e.clientY - this.lastPointerY;
@@ -1421,7 +1515,29 @@ class ImageOverlayApp {
     }
 
     onPointerUp(e) {
-        if (e.pointerId !== this.panPointerId) return;
+        if (e.pointerType === 'touch') {
+            this.canvasPointers.delete(e.pointerId);
+            if (this.isPinching && this.canvasPointers.size < 2) {
+                this.isPinching = false;
+                const remaining = [...this.canvasPointers.entries()][0];
+                if (remaining && this.zoom > 1) {
+                    this.panPointerId = remaining[0];
+                    this.lastPointerX = remaining[1].x;
+                    this.lastPointerY = remaining[1].y;
+                    this.isPanning = true;
+                    this.canvasContainer.classList.add('panning');
+                } else {
+                    this.isPanning = false;
+                    this.panPointerId = null;
+                    this.canvasContainer.classList.remove('panning');
+                }
+            }
+        }
+
+        if (e.pointerId !== this.panPointerId) {
+            try { this.canvasContainer.releasePointerCapture(e.pointerId); } catch (_) {}
+            return;
+        }
         this.isPanning = false;
         this.panPointerId = null;
         try { this.canvasContainer.releasePointerCapture(e.pointerId); } catch (_) {}
