@@ -16,6 +16,10 @@ class ImageOverlayApp {
         this.lastPointerY = 0;
         // Persistent crop clip applied to render/export
         this.appliedCrop = null;
+        this.renderRAF = null;
+        this.resizeRAF = null;
+        this.previewVisibilityRAF = null;
+        this.previewSizeKey = '';
 
         this.initializeElements();
         this.setupEventListeners();
@@ -66,8 +70,8 @@ class ImageOverlayApp {
         if (this.saveBtn) this.saveBtn.addEventListener('click', () => this.saveComposite());
         if (this.applyCropBtn) this.applyCropBtn.addEventListener('click', () => this.applyCrop());
         if (this.cancelCropBtn) this.cancelCropBtn.addEventListener('click', () => this.exitCropMode());
-        window.addEventListener('resize', () => { this.resizeCanvas(); this.updatePreviewVisibility(); });
-        window.addEventListener('scroll', () => this.updatePreviewVisibility(), { passive: true });
+        window.addEventListener('resize', () => { this.scheduleResizeCanvas(); this.schedulePreviewVisibility(); });
+        window.addEventListener('scroll', () => this.schedulePreviewVisibility(), { passive: true });
 
         // Global keyboard shortcuts
         window.addEventListener('keydown', (e) => {
@@ -138,9 +142,9 @@ class ImageOverlayApp {
     // Export the current composition (with adjustments) to PNG
     saveComposite() {
         if (!this.layers.length) return;
-        const w = this.canvas.width;
-        const h = this.canvas.height;
         const dpr = Math.max(1, Math.floor(window.devicePixelRatio || 1));
+        const w = this.viewWidth || this.canvas.clientWidth || Math.round(this.canvas.width / dpr);
+        const h = this.viewHeight || this.canvas.clientHeight || Math.round(this.canvas.height / dpr);
         // Use crop rect if present; default to full canvas
         const crop = (this.cropRect && this.cropRect.w > 0 && this.cropRect.h > 0)
             ? this.cropRect
@@ -165,15 +169,7 @@ class ImageOverlayApp {
             if (!layer.visible) continue;
             ctx.save();
             ctx.globalAlpha = layer.opacity;
-            const f = layer.filters || {};
-            ctx.filter = [
-                `brightness(${f.brightness ?? 100}%)`,
-                `contrast(${f.contrast ?? 100}%)`,
-                `saturate(${f.saturation ?? 100}%)`,
-                `hue-rotate(${f.hue ?? 0}deg)`,
-                `blur(${f.blur ?? 0}px)`,
-                `grayscale(${f.grayscale ?? 0}%)`
-            ].join(' ');
+            ctx.filter = this.getLayerFilter(layer);
             const t = layer.transform || {};
             const rad = ((t.rotation ?? 0) * Math.PI) / 180;
             const cx = layer.x + layer.width / 2;
@@ -329,6 +325,8 @@ class ImageOverlayApp {
                 blur: 0,
                 grayscale: 0
             },
+            filterKey: '',
+            filterString: 'none',
             transform: {
                 rotation: 0, // degrees
                 flipH: false,
@@ -755,7 +753,7 @@ class ImageOverlayApp {
         const sidebar = this.sidebar;
         if (!resizer || !sidebar) return;
 
-        const MIN = 280; // ensure room for icons/controls
+        const MIN = 320; // ensure room for the compact professional controls
         const MAX = 640;
         let startX = 0;
         let startWidth = 0;
@@ -781,7 +779,7 @@ class ImageOverlayApp {
             const next = Math.max(MIN, Math.min(MAX, Math.round(startWidth + dx)));
             sidebar.style.width = `${next}px`;
             resizer.setAttribute('aria-valuenow', String(next));
-            this.resizeCanvas();
+            this.scheduleResizeCanvas();
         };
 
         const stopResize = (e) => {
@@ -811,11 +809,11 @@ class ImageOverlayApp {
 
         // Double-click to reset to default width
         resizer.addEventListener('dblclick', () => {
-            const def = 300;
+            const def = 320;
             sidebar.style.width = `${def}px`;
             resizer.setAttribute('aria-valuenow', String(def));
             localStorage.setItem('sidebarWidth', String(def));
-            this.resizeCanvas();
+            this.scheduleResizeCanvas();
         });
     }
 
@@ -1015,26 +1013,12 @@ class ImageOverlayApp {
     }
 
     showNotification(message) {
-        // Create a simple notification
         const notification = document.createElement('div');
         notification.className = 'notification';
         notification.textContent = message;
-        notification.style.cssText = `
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            background: rgba(99, 102, 241, 0.9);
-            color: white;
-            padding: 12px 20px;
-            border-radius: 8px;
-            font-size: 14px;
-            z-index: 1000;
-            animation: slideIn 0.3s ease;
-        `;
 
         document.body.appendChild(notification);
 
-        // Remove after 3 seconds
         setTimeout(() => {
             notification.style.animation = 'slideOut 0.3s ease';
             setTimeout(() => notification.remove(), 300);
@@ -1052,12 +1036,23 @@ class ImageOverlayApp {
         this.layersContainer.innerHTML = '<div class="empty-state"><i class="fas fa-images"></i><p>No layers yet</p><p class="empty-subtitle">Add images to get started</p></div>';
     }
 
+    scheduleResizeCanvas() {
+        if (this.resizeRAF) return;
+        this.resizeRAF = requestAnimationFrame(() => {
+            this.resizeRAF = null;
+            this.resizeCanvas();
+        });
+    }
+
     resizeCanvas() {
         const container = this.canvasContainer;
         const rect = container.getBoundingClientRect();
         const cssW = Math.max(1, Math.round(rect.width));
         const cssH = Math.max(1, Math.round(rect.height));
         const dpr = Math.min(3, Math.max(1, (window.devicePixelRatio || 1)));
+        if (cssW === this.viewWidth && cssH === this.viewHeight && dpr === this.dpr) {
+            return;
+        }
         this.dpr = dpr;
 
         // Set backing store size in device pixels and CSS size for layout
@@ -1075,6 +1070,14 @@ class ImageOverlayApp {
     }
 
     renderCanvas() {
+        if (this.renderRAF) return;
+        this.renderRAF = requestAnimationFrame(() => {
+            this.renderRAF = null;
+            this.renderCanvasNow();
+        });
+    }
+
+    renderCanvasNow() {
         this.clearCanvas();
         const width = this.viewWidth || this.canvas.width;
         const height = this.viewHeight || this.canvas.height;
@@ -1121,16 +1124,7 @@ class ImageOverlayApp {
                 this.ctx.save();
                 this.ctx.globalAlpha = layer.opacity;
                 // Apply filters
-                const f = layer.filters || {};
-                const filterStr = [
-                    `brightness(${f.brightness ?? 100}%)`,
-                    `contrast(${f.contrast ?? 100}%)`,
-                    `saturate(${f.saturation ?? 100}%)`,
-                    `hue-rotate(${f.hue ?? 0}deg)`,
-                    `blur(${f.blur ?? 0}px)`,
-                    `grayscale(${f.grayscale ?? 0}%)`
-                ].join(' ');
-                this.ctx.filter = filterStr;
+                this.ctx.filter = this.getLayerFilter(layer);
                 // Apply transforms (rotate around center + flips)
                 const t = layer.transform || {};
                 const rad = ((t.rotation ?? 0) * Math.PI) / 180;
@@ -1157,6 +1151,38 @@ class ImageOverlayApp {
 
         // Update floating preview after each render
         this.renderPreview();
+    }
+
+    getLayerFilter(layer) {
+        const f = layer.filters || {};
+        const brightness = f.brightness ?? 100;
+        const contrast = f.contrast ?? 100;
+        const saturation = f.saturation ?? 100;
+        const hue = f.hue ?? 0;
+        const blur = f.blur ?? 0;
+        const grayscale = f.grayscale ?? 0;
+        const key = `${brightness}|${contrast}|${saturation}|${hue}|${blur}|${grayscale}`;
+        if (layer.filterKey !== key) {
+            layer.filterKey = key;
+            layer.filterString = (
+                brightness === 100 &&
+                contrast === 100 &&
+                saturation === 100 &&
+                hue === 0 &&
+                blur === 0 &&
+                grayscale === 0
+            )
+                ? 'none'
+                : [
+                    `brightness(${brightness}%)`,
+                    `contrast(${contrast}%)`,
+                    `saturate(${saturation}%)`,
+                    `hue-rotate(${hue}deg)`,
+                    `blur(${blur}px)`,
+                    `grayscale(${grayscale}%)`
+                ].join(' ');
+        }
+        return layer.filterString || 'none';
     }
 
     clearCanvas() {
@@ -1403,6 +1429,14 @@ class ImageOverlayApp {
     }
 
     // ----- Floating live preview helpers -----
+    schedulePreviewVisibility() {
+        if (this.previewVisibilityRAF) return;
+        this.previewVisibilityRAF = requestAnimationFrame(() => {
+            this.previewVisibilityRAF = null;
+            this.updatePreviewVisibility();
+        });
+    }
+
     updatePreviewVisibility() {
         if (!this.previewContainer || !this.canvasContainer) return;
         const isMobile = window.matchMedia('(max-width: 768px)').matches;
@@ -1415,7 +1449,9 @@ class ImageOverlayApp {
         const inView = rect.top < window.innerHeight * 0.75 && rect.bottom > window.innerHeight * 0.25;
         const anyAdjustOpen = !!document.querySelector('.adjustments-panel.open');
         const shouldShow = anyAdjustOpen && !inView;
+        const wasHidden = this.previewContainer.classList.contains('hidden');
         this.previewContainer.classList.toggle('hidden', !shouldShow);
+        if (shouldShow && wasHidden) this.renderPreview();
     }
 
     renderPreview() {
@@ -1425,8 +1461,14 @@ class ImageOverlayApp {
         const pw = this.previewContainer.clientWidth || 180;
         const ph = this.previewContainer.clientHeight || 120;
         const dpr = Math.min(2, Math.max(1, Math.floor(window.devicePixelRatio || 1)));
-        pc.width = Math.max(1, Math.round(pw * dpr));
-        pc.height = Math.max(1, Math.round(ph * dpr));
+        const nextWidth = Math.max(1, Math.round(pw * dpr));
+        const nextHeight = Math.max(1, Math.round(ph * dpr));
+        const sizeKey = `${nextWidth}x${nextHeight}`;
+        if (this.previewSizeKey !== sizeKey) {
+            pc.width = nextWidth;
+            pc.height = nextHeight;
+            this.previewSizeKey = sizeKey;
+        }
         const pctx = pc.getContext('2d');
         pctx.setTransform(1,0,0,1,0,0);
         pctx.clearRect(0,0,pc.width, pc.height);
@@ -1708,5 +1750,5 @@ class ImageOverlayApp {
 
 // Initialize the app when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
-    new ImageOverlayApp();
+    window.__imageOverlayApp = new ImageOverlayApp();
 });
